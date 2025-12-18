@@ -21,8 +21,16 @@ st.markdown("Data diperbarui secara realtime dari Google Sheets.")
 # Kita mengambil "kunci rahasia" dari sistem Secrets Streamlit (bukan file json fisik)
 def connect_to_sheet():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-    # Membaca credentials dari secrets Streamlit
+    
+    # 1. Ambil credentials dari secrets
     creds_dict = dict(st.secrets["gcp_service_account"])
+    
+    # 2. PERBAIKAN OTOMATIS PRIVATE KEY (BAGIAN PENTING!)
+    # Kode ini akan mengubah tulisan "\n" menjadi tombol Enter sungguhan
+    if "private_key" in creds_dict:
+        creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+    
+    # 3. Buat koneksi
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     return client
@@ -100,4 +108,5 @@ else:
 
 # Logika Auto Rerun setiap 10 detik agar realtime
 time.sleep(10)
+
 st.rerun()
