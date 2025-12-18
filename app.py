@@ -11,11 +11,25 @@ from datetime import datetime
 st.set_page_config(page_title="Dashboard Posko Nataru", page_icon="🚌", layout="wide")
 st.title("📊 Dashboard Monitoring Posko Nataru 2025/2026")
 
-# --- KONEKSI GOOGLE SHEETS ---
+# --- KONEKSI GOOGLE SHEETS (AUTO DETECT) ---
 def connect_to_sheet():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     try:
-        creds_dict = json.loads(st.secrets["json_mentah"])
+        # LOGIKA CERDAS: Cek kunci mana yang tersedia di Secrets
+        if "json_mentah" in st.secrets:
+            # Jika user pakai cara copy-paste JSON mentah
+            creds_dict = json.loads(st.secrets["json_mentah"])
+            
+        elif "gcp_service_account" in st.secrets:
+            # Jika user pakai cara Script Colab (yang terakhir berhasil)
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            # Pastikan private key terbaca enter-nya dengan benar
+            if "private_key" in creds_dict:
+                creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
+        else:
+            st.error("❌ Kunci Rahasia tidak ditemukan di Secrets!")
+            st.stop()
+
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         return client
