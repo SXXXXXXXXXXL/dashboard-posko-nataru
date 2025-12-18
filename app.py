@@ -4,29 +4,30 @@ from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import plotly.express as px
 import time
-import json
 from datetime import datetime
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Dashboard Posko Nataru", page_icon="🚌", layout="wide")
 st.title("📊 Dashboard Monitoring Posko Nataru 2025/2026")
 
-# --- KONEKSI SANGAT AMAN (ANTI ERROR PADDING) ---
+# --- KONEKSI ---
 def connect_to_sheet():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     
-    # 1. Kita ambil data mentah JSON dari secrets
-    # Pastikan nama di secrets nanti adalah "json_mentah"
+    # 1. Ambil credentials yang sudah diformat otomatis
+    # Karena kita pakai [gcp_service_account] di secrets, kita panggil kuncinya
     try:
-        json_str = st.secrets["json_mentah"]
-        # Parse text string menjadi Dictionary Python yang valid
-        creds_dict = json.loads(json_str)
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        
+        # Jaga-jaga: Pastikan private key terbaca enter-nya dengan benar
+        if "private_key" in creds_dict:
+            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
         
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
         client = gspread.authorize(creds)
         return client
     except Exception as e:
-        st.error(f"Gagal memproses Credentials: {e}")
+        st.error(f"Gagal login: {e}")
         st.stop()
 
 # --- FUNGSI LOAD DATA ---
@@ -34,11 +35,10 @@ def connect_to_sheet():
 def load_data():
     try:
         client = connect_to_sheet()
-        # ID Spreadsheet Anda
+        # ID SPREADSHEET ANDA
         sheet_id = '1IOOY8nR4UbNUB77pelUoYYYYByp9PBApl_A5BqYu-3U'
         
         sheet = client.open_by_key(sheet_id)
-        # Menggunakan get_all_values agar aman dari duplikat header
         all_data = sheet.get_worksheet(0).get_all_values()
         
         if len(all_data) < 2:
@@ -47,7 +47,9 @@ def load_data():
         df = pd.DataFrame(all_data[1:], columns=all_data[0])
         
         # Preprocessing
-        df['Tanggal Laporan'] = pd.to_datetime(df['Tanggal Laporan'])
+        if 'Tanggal Laporan' in df.columns:
+            df['Tanggal Laporan'] = pd.to_datetime(df['Tanggal Laporan'])
+            
         cols_num = ['Jumlah Penumpang Datang', 'Jumlah Penumpang BERANGKAT']
         for col in cols_num:
             if col in df.columns:
@@ -55,7 +57,7 @@ def load_data():
             
         return df
     except Exception as e:
-        st.error(f"Terjadi kesalahan saat menarik data: {e}")
+        st.error(f"Error Data: {e}")
         return pd.DataFrame()
 
 # --- TAMPILAN DASHBOARD ---
@@ -69,7 +71,7 @@ if not df.empty:
     c1, c2, c3 = st.columns(3)
     c1.metric("Penumpang Datang", f"{total_datang:,.0f}")
     c2.metric("Penumpang Berangkat", f"{total_berangkat:,.0f}")
-    c3.metric("Status", "🟢 Online")
+    c3.metric("Status API", "🟢 Terhubung")
     
     st.markdown("---")
     
@@ -78,7 +80,6 @@ if not df.empty:
         modes = df['Jenis Simpul Transportasi'].unique()
         cols = st.columns(2)
         
-        # Siapkan data melt
         cols_target = ['Jumlah Penumpang Datang', 'Jumlah Penumpang BERANGKAT']
         df_melt = df.melt(id_vars=['Tanggal Laporan', 'Jenis Simpul Transportasi'], 
                           value_vars=[c for c in cols_target if c in df.columns],
@@ -90,13 +91,12 @@ if not df.empty:
                 fig = px.line(subset, x='Tanggal Laporan', y='Jumlah', color='Status', 
                               title=f"{mode}", markers=True, template='plotly_white')
                 st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("Kolom 'Jenis Simpul Transportasi' tidak ditemukan.")
-
-    if st.button("Refresh Data"):
+    
+    if st.button("Refresh Manual"):
         st.rerun()
+
 else:
-    st.info("Menunggu data... atau gagal terhubung.")
+    st.info("Sedang menghubungkan ke Google Sheets...")
 
 time.sleep(10)
 st.rerun()
