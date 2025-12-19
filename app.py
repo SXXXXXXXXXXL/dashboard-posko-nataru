@@ -246,3 +246,4 @@ with tab_insiden:
 # --- AUTO RELOAD SCRIPT ---
 time.sleep(10)
 st.rerun()
+
