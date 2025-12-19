@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.express as px
 import time
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(page_title="Dashboard Posko Nataru", page_icon="🚌", layout="wide")
@@ -44,7 +44,8 @@ def connect_to_sheet():
         st.stop()
 
 # --- FUNGSI LOAD DATA GABUNGAN ---
-@st.cache_data(ttl=10)
+# ttl=15 detik agar memberi jeda lebih aman ke Google API
+@st.cache_data(ttl=15, show_spinner="Sedang menarik data dari Google Sheets...")
 def load_traffic_data():
     client = connect_to_sheet()
     all_dfs = []
@@ -61,7 +62,8 @@ def load_traffic_data():
                 temp_df['Jenis Simpul Transportasi'] = moda
                 all_dfs.append(temp_df)
         except Exception as e:
-            print(f"Gagal load {moda}: {e}")
+            # Print error ke console untuk debugging, tapi jangan hentikan app
+            print(f"⚠️ Gagal load {moda} (Mungkin Rate Limit): {e}")
             continue
 
     if all_dfs:
@@ -110,6 +112,10 @@ def load_petugas_log():
 df_traffic, numeric_cols = load_traffic_data()
 df_petugas = load_petugas_log()
 
+# --- HITUNG WAKTU WIB (UTC + 7) ---
+waktu_sekarang_wib = datetime.utcnow() + timedelta(hours=7)
+str_waktu = waktu_sekarang_wib.strftime('%H:%M:%S')
+
 # KPI GLOBAL
 c1, c2, c3 = st.columns(3)
 total_pergerakan = df_traffic[numeric_cols].sum().sum() if not df_traffic.empty and numeric_cols else 0
@@ -117,8 +123,8 @@ c1.metric("Total Pergerakan (Nasional)", f"{total_pergerakan:,.0f}")
 c2.metric("Total Laporan Masuk", f"{len(df_traffic)} Laporan")
 
 with c3:
-    st.metric("Last Update", datetime.now().strftime('%H:%M:%S'))
-    st.caption("🔄 Auto-refresh setiap 10 detik")
+    st.metric("Last Update (WIB)", str_waktu)
+    st.caption("🔄 Auto-refresh: 15 detik")
 
 st.markdown("---")
 
@@ -127,7 +133,7 @@ tab_trafik, tab_kepadatan, tab_insiden = st.tabs(["📊 Trafik & Pergerakan", "�
 
 # ================= TAB 1: TRAFIK (Line Chart) =================
 with tab_trafik:
-    st.subheader("Tren Lalu Lintas Penumpang Nataru")
+    st.subheader("Analisis Tren Jumlah Penumpang & Kendaraan")
     
     for mode in SUMBER_DATA_MODA.keys():
         with st.expander(f"📍 Laporan: {mode}", expanded=True):
@@ -153,7 +159,7 @@ with tab_trafik:
 
 # ================= TAB 2: KEPADATAN (% Okupansi) =================
 with tab_kepadatan:
-    st.subheader("Persentase Kepadatan Simpul Transportasi (% Okupansi)")
+    st.subheader("Tingkat Kepadatan (% Okupansi)")
     st.caption("Konversi: Normal ≤20%, Ramai ≤45%, Padat ≤75%, Sangat Padat ≤95%")
 
     for mode in SUMBER_DATA_MODA.keys():
@@ -193,6 +199,8 @@ with tab_kepadatan:
 # ================= TAB 3: INSIDEN (Bar Chart Kejadian) =================
 with tab_insiden:
     st.subheader("📊 Statistik Kejadian Khusus / Insiden")
+    st.caption("Menghitung jumlah laporan yang memiliki status 'Ada' pada kolom Kejadian Khusus.")
+
     for mode in SUMBER_DATA_MODA.keys():
         st.markdown(f"### 📍 {mode}")
         
@@ -205,19 +213,13 @@ with tab_insiden:
             st.markdown("---")
             continue
         
-        # 1. Cari kolom "Apakah ada insiden?"
         col_insiden_flag = next((c for c in subset.columns if 'kejadian khusus' in c.lower() or 'insiden' in c.lower()), None)
-        # 2. Cari kolom deskripsi "Uraian Kejadian" (untuk detail di tabel)
         col_uraian = next((c for c in subset.columns if 'uraian kejadian' in c.lower()), None)
 
         if col_insiden_flag:
-            # Filter baris yang isinya "Ada" (Case Insensitive)
-            # Contoh: "Ada", "ada", "Ya, Ada"
             insiden_df = subset[subset[col_insiden_flag].astype(str).str.contains("Ada", case=False, na=False)]
             
             if not insiden_df.empty:
-                # A. BAR CHART JUMLAH INSIDEN
-                # Group by Tanggal -> Count
                 df_count = insiden_df.groupby('Tanggal Laporan').size().reset_index(name='Jumlah Insiden')
                 
                 fig_insiden = px.bar(
@@ -226,12 +228,11 @@ with tab_insiden:
                     y='Jumlah Insiden',
                     title=f"Frekuensi Insiden - {mode}",
                     text_auto=True,
-                    color_discrete_sequence=['#dc3545'] # Warna Merah
+                    color_discrete_sequence=['#dc3545']
                 )
                 fig_insiden.update_layout(yaxis_title="Jumlah Kejadian")
                 st.plotly_chart(fig_insiden, use_container_width=True)
                 
-                # B. TABEL DETAIL
                 with st.expander(f"🚨 Lihat Detail Kejadian di {mode} ({len(insiden_df)} kejadian)"):
                     cols_show = ['Tanggal Laporan', col_insiden_flag]
                     if col_uraian: cols_show.append(col_uraian)
@@ -243,7 +244,11 @@ with tab_insiden:
         
         st.markdown("---")
 
-# --- AUTO RELOAD SCRIPT ---
-time.sleep(10)
-st.rerun()
+# --- MANUAL REFRESH (CLEAR CACHE) ---
+if st.button("🔄 Paksa Tarik Data Baru (Clear Cache)"):
+    st.cache_data.clear()
+    st.rerun()
 
+# --- AUTO RELOAD SCRIPT ---
+time.sleep(15) # Diubah ke 15 detik agar lebih aman dari limit Google
+st.rerun()
