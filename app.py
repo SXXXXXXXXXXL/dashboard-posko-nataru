@@ -44,7 +44,6 @@ def connect_to_sheet():
         st.stop()
 
 # --- FUNGSI LOAD DATA GABUNGAN ---
-# ttl=15 detik agar aman dari limit Google API
 @st.cache_data(ttl=15, show_spinner="Sedang menarik data dari Google Sheets...")
 def load_traffic_data():
     client = connect_to_sheet()
@@ -112,7 +111,7 @@ def load_petugas_log():
 df_traffic, numeric_cols = load_traffic_data()
 df_petugas = load_petugas_log()
 
-# 2. HEADER & WAKTU (WIB)
+# 2. HEADER & WAKTU
 waktu_sekarang_wib = datetime.utcnow() + timedelta(hours=7)
 str_waktu = waktu_sekarang_wib.strftime('%H:%M:%S')
 
@@ -126,24 +125,22 @@ with c3:
 
 st.markdown("---")
 
-# 3. NAVIGASI MENU (PENGGANTI TABS BIASA)
-# Menggunakan st.radio dengan key session_state agar tidak reset saat refresh
+# 3. NAVIGASI MENU (PERSISTENT)
 if 'pilihan_menu' not in st.session_state:
     st.session_state['pilihan_menu'] = "📊 Trafik & Pergerakan"
 
 menu_opsi = ["📊 Trafik & Pergerakan", "🚦 Situasi & Kepadatan", "⚠️ Insiden & Kejadian"]
 
-# Tombol navigasi horizontal
 selected_menu = st.radio(
     "Pilih Tampilan Dashboard:",
     menu_opsi,
     horizontal=True,
-    key="pilihan_menu" # PENTING: Key ini menjaga posisi menu tetap sama saat reload
+    key="pilihan_menu"
 )
 
 st.markdown("---")
 
-# ================= KONTEN HALAMAN BERDASARKAN MENU =================
+# ================= KONTEN HALAMAN =================
 
 # === HALAMAN 1: TRAFIK ===
 if selected_menu == "📊 Trafik & Pergerakan":
@@ -162,7 +159,6 @@ if selected_menu == "📊 Trafik & Pergerakan":
             if 'Tanggal Laporan' in subset.columns:
                 subset = subset.sort_values('Tanggal Laporan')
             
-            # Line Chart
             cols_active = [c for c in numeric_cols if c in subset.columns and subset[c].sum() > 0]
             if cols_active:
                 fig = px.line(subset, x='Tanggal Laporan', y=cols_active, markers=True, title=f"Tren di {mode}", template='seaborn')
@@ -210,10 +206,10 @@ elif selected_menu == "🚦 Situasi & Kepadatan":
             st.warning("Kolom Situasi tidak ditemukan.")
         st.markdown("---")
 
-# === HALAMAN 3: INSIDEN ===
+# === HALAMAN 3: INSIDEN (FIXED FILTER) ===
 elif selected_menu == "⚠️ Insiden & Kejadian":
     st.subheader("📊 Statistik Kejadian Khusus / Insiden")
-    st.caption("Menghitung jumlah laporan yang memiliki status 'Ada' pada kolom Kejadian Khusus.")
+    st.caption("Menghitung jumlah laporan yang benar-benar berstatus 'Ada' (Mengabaikan 'Tidak Ada').")
 
     for mode in SUMBER_DATA_MODA.keys():
         st.markdown(f"### 📍 {mode}")
@@ -231,7 +227,18 @@ elif selected_menu == "⚠️ Insiden & Kejadian":
         col_uraian = next((c for c in subset.columns if 'uraian kejadian' in c.lower()), None)
 
         if col_insiden_flag:
-            insiden_df = subset[subset[col_insiden_flag].astype(str).str.contains("Ada", case=False, na=False)]
+            # --- PERBAIKAN LOGIKA FILTER ---
+            # 1. Pastikan kolom dibaca sebagai string
+            # 2. Cari yang mengandung kata "ada"
+            # 3. DAN pastikan TIDAK mengandung kata "tidak"
+            # Ini mencegah "Tidak Ada" ikut terhitung.
+            
+            series_lower = subset[col_insiden_flag].astype(str).str.lower().str.strip()
+            
+            insiden_df = subset[
+                (series_lower.str.contains("ada", na=False)) & 
+                (~series_lower.str.contains("tidak", na=False))
+            ]
             
             if not insiden_df.empty:
                 df_count = insiden_df.groupby('Tanggal Laporan').size().reset_index(name='Jumlah Insiden')
@@ -264,7 +271,5 @@ if st.button("🔄 Paksa Tarik Data Baru (Clear Cache)"):
     st.rerun()
 
 # --- AUTO RELOAD SCRIPT ---
-# Ini akan mereload halaman, tapi karena kita pakai 'key' di st.radio, 
-# pilihan menu terakhir akan tetap terpilih.
 time.sleep(15) 
 st.rerun()
