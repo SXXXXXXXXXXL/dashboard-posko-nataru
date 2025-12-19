@@ -245,10 +245,11 @@ with tab_insiden:
         st.markdown("---")
 
 # --- MANUAL REFRESH (CLEAR CACHE) ---
-if st.button("🔄 Paksa Tarik Data Baru (Clear Cache)"):
+if st.button("🔄 Tarik Data Baru Manual (Clear Cache)"):
     st.cache_data.clear()
     st.rerun()
 
 # --- AUTO RELOAD SCRIPT ---
 time.sleep(15) # Diubah ke 15 detik agar lebih aman dari limit Google
 st.rerun()
+
