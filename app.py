@@ -44,7 +44,7 @@ def connect_to_sheet():
         st.stop()
 
 # --- FUNGSI LOAD DATA GABUNGAN ---
-# ttl=15 detik agar memberi jeda lebih aman ke Google API
+# ttl=15 detik agar aman dari limit Google API
 @st.cache_data(ttl=15, show_spinner="Sedang menarik data dari Google Sheets...")
 def load_traffic_data():
     client = connect_to_sheet()
@@ -62,8 +62,7 @@ def load_traffic_data():
                 temp_df['Jenis Simpul Transportasi'] = moda
                 all_dfs.append(temp_df)
         except Exception as e:
-            # Print error ke console untuk debugging, tapi jangan hentikan app
-            print(f"⚠️ Gagal load {moda} (Mungkin Rate Limit): {e}")
+            print(f"⚠️ Gagal load {moda}: {e}")
             continue
 
     if all_dfs:
@@ -109,30 +108,45 @@ def load_petugas_log():
 
 # ================= TAMPILAN DASHBOARD =================
 
+# 1. LOAD DATA
 df_traffic, numeric_cols = load_traffic_data()
 df_petugas = load_petugas_log()
 
-# --- HITUNG WAKTU WIB (UTC + 7) ---
+# 2. HEADER & WAKTU (WIB)
 waktu_sekarang_wib = datetime.utcnow() + timedelta(hours=7)
 str_waktu = waktu_sekarang_wib.strftime('%H:%M:%S')
 
-# KPI GLOBAL
 c1, c2, c3 = st.columns(3)
 total_pergerakan = df_traffic[numeric_cols].sum().sum() if not df_traffic.empty and numeric_cols else 0
 c1.metric("Total Pergerakan (Nasional)", f"{total_pergerakan:,.0f}")
 c2.metric("Total Laporan Masuk", f"{len(df_traffic)} Laporan")
-
 with c3:
     st.metric("Last Update (WIB)", str_waktu)
     st.caption("🔄 Auto-refresh: 15 detik")
 
 st.markdown("---")
 
-# --- MEMBUAT 3 TABS ---
-tab_trafik, tab_kepadatan, tab_insiden = st.tabs(["📊 Trafik & Pergerakan", "🚦 Situasi & Kepadatan", "⚠️ Insiden & Kejadian"])
+# 3. NAVIGASI MENU (PENGGANTI TABS BIASA)
+# Menggunakan st.radio dengan key session_state agar tidak reset saat refresh
+if 'pilihan_menu' not in st.session_state:
+    st.session_state['pilihan_menu'] = "📊 Trafik & Pergerakan"
 
-# ================= TAB 1: TRAFIK (Line Chart) =================
-with tab_trafik:
+menu_opsi = ["📊 Trafik & Pergerakan", "🚦 Situasi & Kepadatan", "⚠️ Insiden & Kejadian"]
+
+# Tombol navigasi horizontal
+selected_menu = st.radio(
+    "Pilih Tampilan Dashboard:",
+    menu_opsi,
+    horizontal=True,
+    key="pilihan_menu" # PENTING: Key ini menjaga posisi menu tetap sama saat reload
+)
+
+st.markdown("---")
+
+# ================= KONTEN HALAMAN BERDASARKAN MENU =================
+
+# === HALAMAN 1: TRAFIK ===
+if selected_menu == "📊 Trafik & Pergerakan":
     st.subheader("Analisis Tren Jumlah Penumpang & Kendaraan")
     
     for mode in SUMBER_DATA_MODA.keys():
@@ -157,8 +171,8 @@ with tab_trafik:
             else:
                 st.info("Data masuk tapi angka pergerakan 0.")
 
-# ================= TAB 2: KEPADATAN (% Okupansi) =================
-with tab_kepadatan:
+# === HALAMAN 2: KEPADATAN ===
+elif selected_menu == "🚦 Situasi & Kepadatan":
     st.subheader("Tingkat Kepadatan (% Okupansi)")
     st.caption("Konversi: Normal ≤20%, Ramai ≤45%, Padat ≤75%, Sangat Padat ≤95%")
 
@@ -196,8 +210,8 @@ with tab_kepadatan:
             st.warning("Kolom Situasi tidak ditemukan.")
         st.markdown("---")
 
-# ================= TAB 3: INSIDEN (Bar Chart Kejadian) =================
-with tab_insiden:
+# === HALAMAN 3: INSIDEN ===
+elif selected_menu == "⚠️ Insiden & Kejadian":
     st.subheader("📊 Statistik Kejadian Khusus / Insiden")
     st.caption("Menghitung jumlah laporan yang memiliki status 'Ada' pada kolom Kejadian Khusus.")
 
@@ -244,12 +258,13 @@ with tab_insiden:
         
         st.markdown("---")
 
-# --- MANUAL REFRESH (CLEAR CACHE) ---
-if st.button("🔄 Tarik Data Baru Manual (Clear Cache)"):
+# --- MANUAL REFRESH ---
+if st.button("🔄 Paksa Tarik Data Baru (Clear Cache)"):
     st.cache_data.clear()
     st.rerun()
 
 # --- AUTO RELOAD SCRIPT ---
-time.sleep(15) # Diubah ke 15 detik agar lebih aman dari limit Google
+# Ini akan mereload halaman, tapi karena kita pakai 'key' di st.radio, 
+# pilihan menu terakhir akan tetap terpilih.
+time.sleep(15) 
 st.rerun()
-
