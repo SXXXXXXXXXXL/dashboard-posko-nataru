@@ -44,6 +44,7 @@ def connect_to_sheet():
         st.stop()
 
 # --- FUNGSI LOAD DATA GABUNGAN ---
+# ttl=10 artinya cache data akan kadaluarsa dalam 10 detik
 @st.cache_data(ttl=10)
 def load_traffic_data():
     client = connect_to_sheet()
@@ -62,6 +63,7 @@ def load_traffic_data():
                 all_dfs.append(temp_df)
                 
         except Exception as e:
+            # Silent error agar loop tetap jalan
             print(f"Gagal load {moda}: {e}")
             continue
 
@@ -116,19 +118,23 @@ c1, c2, c3 = st.columns(3)
 total_pergerakan = df_traffic[numeric_cols].sum().sum() if not df_traffic.empty and numeric_cols else 0
 c1.metric("Total Pergerakan (Nasional)", f"{total_pergerakan:,.0f}")
 c2.metric("Total Laporan Masuk", f"{len(df_traffic)} Laporan")
-c3.metric("Last Update", datetime.now().strftime('%H:%M:%S'))
+
+# Tampilkan waktu update + Info Auto Reload
+with c3:
+    st.metric("Last Update", datetime.now().strftime('%H:%M:%S'))
+    st.caption("🔄 Auto-refresh setiap 10 detik")
+
 st.markdown("---")
 
-# --- MEMBUAT TABS (HALAMAN BARU) ---
-tab_trafik, tab_kepadatan = st.tabs(["📊 Trafik & Pergerakan", "🚦 Situasi & Kepadatan"])
+# --- MEMBUAT TABS ---
+tab_trafik, tab_kepadatan = st.tabs(["📊 Trafik & Pergerakan", "🚦 Situasi & Kepadatan (%)"])
 
-# ================= TAB 1: TRAFIK (Line Chart & Angka) =================
+# ================= TAB 1: TRAFIK (Line Chart) =================
 with tab_trafik:
     st.subheader("Analisis Tren Jumlah Penumpang & Kendaraan")
     
     for mode in SUMBER_DATA_MODA.keys():
         with st.expander(f"📍 Laporan: {mode}", expanded=True):
-            # Filter Data
             subset = pd.DataFrame()
             if not df_traffic.empty and 'Jenis Simpul Transportasi' in df_traffic.columns:
                 subset = df_traffic[df_traffic['Jenis Simpul Transportasi'] == mode]
@@ -137,7 +143,6 @@ with tab_trafik:
                 st.warning(f"⚠️ Belum ada data laporan untuk **{mode}**.")
                 continue 
 
-            # Sort Data
             if 'Tanggal Laporan' in subset.columns:
                 subset = subset.sort_values('Tanggal Laporan')
             
@@ -146,12 +151,12 @@ with tab_trafik:
             
             if cols_active:
                 fig = px.line(subset, x='Tanggal Laporan', y=cols_active, markers=True, title=f"Tren di {mode}", template='seaborn')
-                fig.update_layout(yaxis_title="Jumlah", xaxis_title="Tanggal")
+                fig.update_layout(yaxis_title="Jumlah")
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info(f"Data masuk untuk {mode}, namun angka pergerakan 0.")
 
-            # B. TABEL PENTING (KENDALA)
+            # B. KENDALA
             target_cols = {
                 'kendala': next((c for c in subset.columns if 'kendala' in c.lower()), None),
                 'kejadian': next((c for c in subset.columns if 'uraian kejadian' in c.lower()), None),
@@ -161,17 +166,21 @@ with tab_trafik:
             mask_kendala = (subset[target_cols['kendala']].astype(str).str.len() > 3) & (subset[target_cols['kendala']] != "-") if target_cols['kendala'] else False
             mask_kejadian = (subset[target_cols['kejadian']].astype(str).str.len() > 3) & (subset[target_cols['kejadian']] != "-") if target_cols['kejadian'] else False
             
-            laporan_penting = subset[mask_kendala | mask_kejadian] if isinstance(mask_kendala, pd.Series) else pd.DataFrame()
+            # Fix: Pastikan mask berupa Series boolean, bukan scalar boolean
+            if isinstance(mask_kendala, bool): mask_kendala = pd.Series([False]*len(subset), index=subset.index)
+            if isinstance(mask_kejadian, bool): mask_kejadian = pd.Series([False]*len(subset), index=subset.index)
+
+            laporan_penting = subset[mask_kendala | mask_kejadian]
             
             if not laporan_penting.empty:
                 st.error(f"📢 **Catatan / Kendala ({mode}):**")
                 cols_show = ['Tanggal Laporan'] + [v for k,v in target_cols.items() if v]
                 st.dataframe(laporan_penting[cols_show], hide_index=True, use_container_width=True)
 
-# ================= TAB 2: KEPADATAN (Bar Chart Situasi) =================
+# ================= TAB 2: KEPADATAN (Persentase) =================
 with tab_kepadatan:
-    st.subheader("Analisis Kepadatan & Situasi Operasional")
-    st.caption("Grafik ini menampilkan frekuensi status kepadatan (Normal/Padat/Macet) per hari.")
+    st.subheader("Tingkat Kepadatan (% Okupansi)")
+    st.caption("Konversi Situasi: Normal ≤20%, Ramai ≤45%, Padat ≤75%, Sangat Padat ≤95%")
 
     for mode in SUMBER_DATA_MODA.keys():
         st.markdown(f"### 📍 {mode}")
@@ -189,43 +198,58 @@ with tab_kepadatan:
         col_situasi = next((c for c in subset.columns if 'situasi' in c.lower() or 'kondisi' in c.lower()), None)
         
         if col_situasi:
-            # Hitung Jumlah Laporan per Situasi per Hari
-            # Format: Tanggal | Situasi | Jumlah
-            df_chart = subset.groupby(['Tanggal Laporan', col_situasi]).size().reset_index(name='Jumlah Laporan')
-            
-            # Definisi Warna Manual agar Konsisten (Opsional)
-            color_map = {
-                "Normal": "#28a745",          # Hijau
-                "Lancar": "#28a745",
-                "Ramai Lancar": "#17a2b8",    # Biru Muda
-                "Padat": "#ffc107",           # Kuning/Oranye
-                "Sangat Padat": "#fd7e14",    # Oranye Tua
-                "Macet": "#dc3545"            # Merah
+            # --- MAPPING LOGIC (SITUASI -> PERSEN) ---
+            # Menggunakan batas atas sebagai nilai plotting
+            mapping_persen = {
+                "Normal": 20,
+                "Lancar": 20,
+                "Ramai": 45,
+                "Ramai Lancar": 45,
+                "Padat": 75,
+                "Sangat Padat": 95,
+                "Macet": 100
             }
+            
+            # Buat kolom baru 'Occupancy Rate'
+            # Jika kata tidak ditemukan di mapping, anggap 0 atau biarkan (fillna 0)
+            subset['Occupancy Rate'] = subset[col_situasi].map(mapping_persen).fillna(0)
+            
+            # Definisi Warna Bar berdasarkan Nilai Persen
+            # 0-20: Hijau, 21-45: Biru/Kuning, 46-75: Orange, >75: Merah
+            def get_color(val):
+                if val <= 20: return "#28a745" # Hijau
+                elif val <= 45: return "#ffc107" # Kuning
+                elif val <= 75: return "#fd7e14" # Orange
+                else: return "#dc3545" # Merah
+
+            subset['Warna'] = subset['Occupancy Rate'].apply(get_color)
 
             # Buat Bar Chart
             fig_bar = px.bar(
-                df_chart,
+                subset,
                 x='Tanggal Laporan',
-                y='Jumlah Laporan',
-                color=col_situasi, # Warna beda tiap status
-                title=f"Distribusi Kepadatan - {mode}",
-                labels={'Jumlah Laporan': 'Frekuensi Laporan', col_situasi: 'Status'},
-                color_discrete_map=color_map, # Terapkan warna manual
-                text_auto=True # Tampilkan angka di dalam bar
+                y='Occupancy Rate',
+                title=f"Grafik Kepadatan - {mode}",
+                labels={'Occupancy Rate': 'Tingkat Kepadatan (%)'},
+                text_auto=True, # Tampilkan angka di bar
             )
+            
+            # Terapkan warna kustom & Range Y-Axis 0-100%
+            fig_bar.update_traces(marker_color=subset['Warna'])
+            fig_bar.update_layout(yaxis_range=[0, 100], yaxis_title="Okupansi (%)")
             
             st.plotly_chart(fig_bar, use_container_width=True)
             
-            # Tampilkan Data Tabel Ringkas
+            # Tabel Ringkas
             with st.expander(f"Lihat Data Detail Situasi {mode}"):
-                st.dataframe(subset[['Tanggal Laporan', col_situasi]], use_container_width=True)
+                st.dataframe(subset[['Tanggal Laporan', col_situasi, 'Occupancy Rate']], use_container_width=True)
 
         else:
             st.warning(f"Kolom 'Situasi Operasional' tidak ditemukan di data {mode}.")
         
         st.markdown("---")
 
-# Refresh Button di Bawah
-if st.button("🔄 Refresh Data"):
-    st.rerun()
+# --- AUTO RELOAD SCRIPT ---
+# Script akan berhenti sejenak (10 detik) lalu memuat ulang halaman
+time.sleep(10)
+st.rerun()
