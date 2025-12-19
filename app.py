@@ -179,7 +179,7 @@ with tab_trafik:
 
 # ================= TAB 2: KEPADATAN (Persentase) =================
 with tab_kepadatan:
-    st.subheader("Tingkat Kepadatan (% Okupansi)")
+    st.subheader("Tingkat Kepadatan (% Kepadatan)")
     st.caption("Konversi Situasi: Normal ≤20%, Ramai ≤45%, Padat ≤75%, Sangat Padat ≤95%")
 
     for mode in SUMBER_DATA_MODA.keys():
@@ -253,3 +253,4 @@ with tab_kepadatan:
 # Script akan berhenti sejenak (10 detik) lalu memuat ulang halaman
 time.sleep(10)
 st.rerun()
+
