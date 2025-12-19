@@ -11,8 +11,7 @@ from datetime import datetime
 st.set_page_config(page_title="Dashboard Posko Nataru", page_icon="🚌", layout="wide")
 st.title("📊 Dashboard Monitoring Posko Nataru 2025/2026")
 
-# --- DATABASE ID SPREADSHEETS (Dari Link yang Anda Berikan) ---
-# Dictionary: Nama Moda -> ID Sheet
+# --- DATABASE ID SPREADSHEETS ---
 SUMBER_DATA_MODA = {
     "Pelabuhan": "1xDlyq5bfGaF3wW8rxwGn2NZnrgLvCcxX_fQr6eQAstE",
     "Terminal": "1uvtIjGi9cg1qbEoGKerV0BKXUs0k0pAhdPw0DYPnkfQ",
@@ -21,7 +20,6 @@ SUMBER_DATA_MODA = {
     "Rest Area": "1-bFe3hIO1_Fddf-0d0HAj2gMf-SiQu51oPlRoxPt3UI"
 }
 
-# ID Sheet Utama (Log Identitas Petugas)
 ID_SHEET_UTAMA = "1ym4LXF5qqmaN_NTb4Zsn2SwHP0KsdoYqvbeIw9lQLqI"
 
 # --- KONEKSI GOOGLE SHEETS ---
@@ -45,54 +43,74 @@ def connect_to_sheet():
         st.error(f"Gagal login: {e}")
         st.stop()
 
-# --- FUNGSI LOAD DATA GABUNGAN (MODA) ---
+# --- FUNGSI LOAD DATA GABUNGAN (PERBAIKAN) ---
 @st.cache_data(ttl=10)
 def load_traffic_data():
     client = connect_to_sheet()
     all_dfs = []
     
-    # Loop membuka setiap Sheet Moda
     for moda, sheet_id in SUMBER_DATA_MODA.items():
         try:
-            # Buka sheet berdasarkan ID
             sh = client.open_by_key(sheet_id)
-            # Ambil worksheet pertama
+            # Coba ambil data, jika sheet kosong lewatkan
             ws = sh.get_worksheet(0)
             data = ws.get_all_values()
             
             if len(data) > 1:
+                # Membuat DataFrame
                 temp_df = pd.DataFrame(data[1:], columns=data[0])
-                # Tandai data ini milik siapa (Penting!)
+                
+                # Bersihkan spasi di nama kolom (PENTING)
+                temp_df.columns = temp_df.columns.str.strip()
+                
+                # Tandai data
                 temp_df['Jenis Simpul Transportasi'] = moda
                 all_dfs.append(temp_df)
+            else:
+                # Jika sheet ada tapi isinya cuma header atau kosong
+                print(f"Sheet {moda} kosong atau hanya header.")
                 
         except Exception as e:
-            # Jika satu sheet error, jangan matikan semua dashboard. Cukup beri peringatan.
-            st.warning(f"⚠️ Gagal membaca data {moda}: {e}")
+            # Tampilkan warning di console/log saja agar UI tidak penuh error
+            print(f"Gagal load {moda}: {e}")
             continue
 
     if all_dfs:
         df = pd.concat(all_dfs, ignore_index=True)
         
-        # --- PREPROCESSING ---
-        if 'Tanggal Laporan' in df.columns:
-            df['Tanggal Laporan'] = pd.to_datetime(df['Tanggal Laporan'])
+        # --- PREPROCESSING TANGGAL ---
+        # Cari kolom tanggal dengan berbagai variasi nama
+        col_tanggal = next((c for c in df.columns if c.lower() in ['tanggal laporan', 'tanggal', 'tgl', 'timestamp', 'waktu']), None)
         
-        # Normalisasi Kolom Angka (Datang/Berangkat/Kendaraan)
-        # Kita cari kolom yang mengandung kata 'Datang', 'Berangkat', 'Masuk', 'Keluar'
+        if col_tanggal:
+            df['Tanggal Laporan'] = pd.to_datetime(df[col_tanggal], errors='coerce')
+        else:
+            # Jika tidak ada kolom tanggal, buat dummy agar tidak error
+            df['Tanggal Laporan'] = pd.to_datetime('today')
+
+        # --- PREPROCESSING ANGKA (PERBAIKAN UTAMA) ---
+        # Mencari kolom yang berpotensi berisi angka
         cols_numeric = []
+        keywords_angka = ['jumlah', 'pnp', 'penumpang', 'kendaraan', 'datang', 'berangkat', 'naik', 'turun', 'masuk', 'keluar']
+        
         for col in df.columns:
-            # Cek jika kolom mengandung angka penumpang atau kendaraan
-            if any(x in col.lower() for x in ['jumlah', 'penumpang', 'kendaraan', 'datang', 'berangkat']):
+            # Logic: Jika nama kolom mengandung keyword angka
+            if any(k in col.lower() for k in keywords_angka):
                 cols_numeric.append(col)
-                # Bersihkan angka
-                df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                # BERSIHKAN FORMAT: Hapus titik (separator ribuan Indo) lalu convert
+                # Contoh: "1.200" -> "1200" -> 1200
+                df[col] = (df[col].astype(str)
+                           .str.replace('.', '', regex=False)  # Hapus titik ribuan
+                           .str.replace(',', '.', regex=False) # Ubah koma jadi titik desimal (jika ada)
+                           .str.extract(r'(\d+)', expand=False) # Ambil hanya angkanya
+                           .fillna(0))
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
                 
         return df, cols_numeric
     else:
         return pd.DataFrame(), []
 
-# --- FUNGSI LOAD DATA PETUGAS (MAIN LINK) ---
+# --- FUNGSI LOAD DATA PETUGAS ---
 @st.cache_data(ttl=30)
 def load_petugas_log():
     try:
@@ -107,98 +125,87 @@ def load_petugas_log():
 
 # ================= TAMPILAN DASHBOARD =================
 
-# 1. LOAD DATA
 df_traffic, numeric_cols = load_traffic_data()
 df_petugas = load_petugas_log()
 
-# 2. HEADER & LOG AKTIVITAS
+# 1. HEADER & KPI
 c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
 
-# Hitung Total (Cari kolom yang relevan secara otomatis)
 total_pergerakan = 0
-if not df_traffic.empty:
-    # Menjumlahkan semua kolom angka yang ditemukan
+if not df_traffic.empty and numeric_cols:
     total_pergerakan = df_traffic[numeric_cols].sum().sum()
 
-c_kpi1.metric("Total Pergerakan (Semua Moda)", f"{total_pergerakan:,.0f}")
+c_kpi1.metric("Total Pergerakan (Nasional)", f"{total_pergerakan:,.0f}")
 c_kpi2.metric("Jumlah Laporan Masuk", f"{len(df_traffic)} Laporan")
-c_kpi3.metric("Status Sistem", "🟢 Online", f"Update: {datetime.now().strftime('%H:%M:%S')}")
-
-# Tampilkan Sekilas Siapa yang Lapor (Dari Link Utama)
-with st.expander("📋 Lihat Log Petugas Piket (Data Link Utama)"):
-    if not df_petugas.empty:
-        st.dataframe(df_petugas.tail(5), hide_index=True, use_container_width=True)
-    else:
-        st.info("Belum ada data petugas di Link Utama.")
+c_kpi3.metric("Last Update", f"{datetime.now().strftime('%H:%M:%S')}")
 
 st.markdown("---")
 
-# 3. VISUALISASI PER MODA
+# 2. DEBUGGER (HANYA MUNCUL JIKA DATA KOSONG)
+# Gunakan ini untuk mengecek kenapa Terminal/Rest Area tidak muncul
+with st.expander("🛠️ Debug Data (Klik disini jika data hilang)"):
+    if not df_traffic.empty:
+        st.write("Moda yang berhasil ditarik:", df_traffic['Jenis Simpul Transportasi'].unique())
+        st.write("Kolom Numerik Terdeteksi:", numeric_cols)
+        st.dataframe(df_traffic.head())
+    else:
+        st.error("Data Frame Kosong. Cek koneksi atau nama sheet.")
+
 # 3. VISUALISASI PER MODA
 if not df_traffic.empty:
-    # --- STEP 1: BERSIHKAN NAMA KOLOM (Sekali saja di luar loop) ---
-    df_traffic.columns = df_traffic.columns.str.strip()
-    
-    # DEBUG: Tampilkan nama kolom jika masih bingung (bisa dikomentari nanti)
-    # st.write("Nama Kolom Terdeteksi:", df_traffic.columns.tolist())
-
     modes = df_traffic['Jenis Simpul Transportasi'].unique()
     
     for mode in modes:
         st.header(f"📍 Laporan: {mode}")
-
-        # --- STEP 2: LOGIKA SORTING AMAN ---
-        target_col = 'Timestamp'
         
-        # Filter data dulu tanpa sort
+        # Filter Data
         subset = df_traffic[df_traffic['Jenis Simpul Transportasi'] == mode]
-
-        # Cek apakah kolom target ada?
-        if target_col in df_traffic.columns:
-            subset = subset.sort_values(target_col)
-        else:
-            # OPTIONAL: Coba cari alternatif nama kolom yang mirip (misal: "Timestamp", "Waktu", "Tgl")
-            alt_cols = [c for c in df_traffic.columns if 'tanggal' in c.lower() or 'waktu' in c.lower() or 'timestamp' in c.lower()]
+        
+        # Sort Data Aman
+        if 'Tanggal Laporan' in subset.columns:
+            subset = subset.sort_values('Tanggal Laporan')
+        
+        # --- A. GRAFIK BATANG (BAR CHART) ---
+        # Kita cari kolom numerik spesifik yang ada di Moda ini (bukan nol semua)
+        cols_active = [c for c in numeric_cols if c in subset.columns and subset[c].sum() > 0]
+        
+        if cols_active:
+            # Tampilkan Grafik
+            fig = px.bar(
+                subset,
+                x='Tanggal Laporan',
+                y=cols_active,
+                barmode='group',
+                title=f"Grafik Pergerakan di {mode}",
+                template='seaborn'
+            )
+            st.plotly_chart(fig, use_container_width=True)
             
-            if alt_cols:
-                # Pakai kolom mirip yang pertama ditemukan
-                selected_col = alt_cols[0]
-                subset = subset.sort_values(selected_col)
-                st.warning(f"⚠️ Kolom '{target_col}' tidak ada. Menggunakan kolom alternatif: '{selected_col}'")
-            else:
-                # Jika benar-benar tidak ada, tampilkan error tapi JANGAN CRASH
-                st.error(f"❌ Gagal sort tanggal. Kolom '{target_col}' tidak ditemukan di sheet {mode}.")
-                st.caption(f"Kolom tersedia: {df_traffic.columns.tolist()}")
+            # Tampilkan Tabel Angka
+            with st.expander(f"📄 Lihat Data Detail {mode}"):
+                st.dataframe(subset[['Tanggal Laporan'] + cols_active], use_container_width=True)
+        else:
+            st.warning(f"⚠️ Data angka belum terdeteksi untuk {mode}. Cek penulisan header kolom di Google Sheet.")
+            st.caption("Pastikan header kolom mengandung kata: 'Jumlah', 'Penumpang', 'Datang', 'Berangkat', atau 'Kendaraan'.")
 
-        # --- A. GRAFIK & VISUALISASI LANJUTAN ---
-        # (Paste kode grafik/visualisasi Anda di sini, pastikan indentasi menjorok ke dalam)
-        # Contoh sederhana untuk test:
-        # st.dataframe(subset.head()) 
-
-        # --- B. TABEL KENDALA (Kode Anda yang lama) ---
+        # --- B. TABEL KENDALA ---
         col_kendala = next((c for c in subset.columns if 'kendala' in c.lower()), None)
         col_solusi = next((c for c in subset.columns if 'solusi' in c.lower()), None)
         
-        if col_kendala and col_solusi:
+        if col_kendala:
             laporan_penting = subset[
-                (subset[col_kendala].str.len() > 3) & (subset[col_kendala] != "-")
-            ][['Tanggal Laporan' if 'Tanggal Laporan' in subset.columns else subset.columns[0], col_kendala, col_solusi]]
-            
+                (subset[col_kendala].astype(str).str.len() > 3) & (subset[col_kendala] != "-")
+            ]
             if not laporan_penting.empty:
                 st.info(f"📢 **Catatan Lapangan ({mode}):**")
-                st.dataframe(laporan_penting, hide_index=True, use_container_width=True)
-            else:
-                st.success("✅ Tidak ada kendala signifikan.")
+                cols_to_show = ['Tanggal Laporan', col_kendala]
+                if col_solusi: cols_to_show.append(col_solusi)
+                st.dataframe(laporan_penting[cols_to_show], hide_index=True, use_container_width=True)
         
         st.markdown("---")
 
 else:
-    st.info("Sedang mengambil data dari 5 Spreadsheet berbeda...")
+    st.info("⏳ Sedang mengambil data...")
 
-# Auto Refresh
 if st.button("🔄 Refresh Data"):
     st.rerun()
-
-time.sleep(15) # Refresh rate sedikit diperlambat karena membuka 6 sheet sekaligus
-st.rerun()
-
