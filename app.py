@@ -134,40 +134,55 @@ with st.expander("📋 Lihat Log Petugas Piket (Data Link Utama)"):
 st.markdown("---")
 
 # 3. VISUALISASI PER MODA
+# 3. VISUALISASI PER MODA
 if not df_traffic.empty:
+    # --- STEP 1: BERSIHKAN NAMA KOLOM (Sekali saja di luar loop) ---
+    df_traffic.columns = df_traffic.columns.str.strip()
+    
+    # DEBUG: Tampilkan nama kolom jika masih bingung (bisa dikomentari nanti)
+    # st.write("Nama Kolom Terdeteksi:", df_traffic.columns.tolist())
+
     modes = df_traffic['Jenis Simpul Transportasi'].unique()
     
     for mode in modes:
         st.header(f"📍 Laporan: {mode}")
-        # Clean column names by removing leading/trailing whitespace
-        df_traffic.columns = df_traffic.columns.str.strip()
 
-# OPTIONAL: Debugging line to see the actual column names in your app
-# st.write("Available columns:", df_traffic.columns.tolist())
-        subset = df_traffic[df_traffic['Jenis Simpul Transportasi'] == mode].sort_values('Tanggal Laporan')
+        # --- STEP 2: LOGIKA SORTING AMAN ---
+        target_col = 'Tanggal Laporan'
         
-        # A. GRAFIK
-        # Cari kolom angka spesifik untuk moda ini (karena Rest Area beda dengan Bandara)
-        # Kita filter kolom numerik yang nilainya > 0 di subset ini agar grafik relevan
-        sort_col = 'Tanggal Laporan'
+        # Filter data dulu tanpa sort
+        subset = df_traffic[df_traffic['Jenis Simpul Transportasi'] == mode]
 
-# Check if the column exists before sorting
-        if sort_col in df_traffic.columns:
-            subset = df_traffic[df_traffic['Jenis Simpul Transportasi'] == mode].sort_values(sort_col)
+        # Cek apakah kolom target ada?
+        if target_col in df_traffic.columns:
+            subset = subset.sort_values(target_col)
         else:
-    # Fallback: If column is missing, show an error or just filter without sorting
-            st.error(f"Column '{sort_col}' not found. Available columns: {df_traffic.columns.tolist()}")
-            subset = df_traffic[df_traffic['Jenis Simpul Transportasi'] == mode]
+            # OPTIONAL: Coba cari alternatif nama kolom yang mirip (misal: "Timestamp", "Waktu", "Tgl")
+            alt_cols = [c for c in df_traffic.columns if 'tanggal' in c.lower() or 'waktu' in c.lower() or 'timestamp' in c.lower()]
+            
+            if alt_cols:
+                # Pakai kolom mirip yang pertama ditemukan
+                selected_col = alt_cols[0]
+                subset = subset.sort_values(selected_col)
+                st.warning(f"⚠️ Kolom '{target_col}' tidak ada. Menggunakan kolom alternatif: '{selected_col}'")
+            else:
+                # Jika benar-benar tidak ada, tampilkan error tapi JANGAN CRASH
+                st.error(f"❌ Gagal sort tanggal. Kolom '{target_col}' tidak ditemukan di sheet {mode}.")
+                st.caption(f"Kolom tersedia: {df_traffic.columns.tolist()}")
 
-        # B. TABEL KENDALA (Fleksibel mencari kolom kendala)
-        # Mencari kolom yang mengandung kata 'Kendala' dan 'Solusi'
+        # --- A. GRAFIK & VISUALISASI LANJUTAN ---
+        # (Paste kode grafik/visualisasi Anda di sini, pastikan indentasi menjorok ke dalam)
+        # Contoh sederhana untuk test:
+        # st.dataframe(subset.head()) 
+
+        # --- B. TABEL KENDALA (Kode Anda yang lama) ---
         col_kendala = next((c for c in subset.columns if 'kendala' in c.lower()), None)
         col_solusi = next((c for c in subset.columns if 'solusi' in c.lower()), None)
         
         if col_kendala and col_solusi:
             laporan_penting = subset[
                 (subset[col_kendala].str.len() > 3) & (subset[col_kendala] != "-")
-            ][['Tanggal Laporan', col_kendala, col_solusi]]
+            ][['Tanggal Laporan' if 'Tanggal Laporan' in subset.columns else subset.columns[0], col_kendala, col_solusi]]
             
             if not laporan_penting.empty:
                 st.info(f"📢 **Catatan Lapangan ({mode}):**")
