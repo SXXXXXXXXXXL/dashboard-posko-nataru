@@ -139,7 +139,11 @@ if not df_traffic.empty:
     
     for mode in modes:
         st.header(f"📍 Laporan: {mode}")
-        
+        # Clean column names by removing leading/trailing whitespace
+df_traffic.columns = df_traffic.columns.str.strip()
+
+# OPTIONAL: Debugging line to see the actual column names in your app
+# st.write("Available columns:", df_traffic.columns.tolist())
         subset = df_traffic[df_traffic['Jenis Simpul Transportasi'] == mode].sort_values('Tanggal Laporan')
         
         # A. GRAFIK
@@ -185,3 +189,4 @@ if st.button("🔄 Refresh Data"):
 
 time.sleep(15) # Refresh rate sedikit diperlambat karena membuka 6 sheet sekaligus
 st.rerun()
+
