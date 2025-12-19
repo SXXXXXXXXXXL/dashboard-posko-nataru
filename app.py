@@ -148,7 +148,7 @@ if not df_traffic.empty:
         st.header(f"📍 Laporan: {mode}")
 
         # --- STEP 2: LOGIKA SORTING AMAN ---
-        target_col = 'Tanggal Laporan'
+        target_col = 'Timestamp'
         
         # Filter data dulu tanpa sort
         subset = df_traffic[df_traffic['Jenis Simpul Transportasi'] == mode]
@@ -201,3 +201,4 @@ if st.button("🔄 Refresh Data"):
 
 time.sleep(15) # Refresh rate sedikit diperlambat karena membuka 6 sheet sekaligus
 st.rerun()
+
