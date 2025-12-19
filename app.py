@@ -57,7 +57,11 @@ def load_traffic_data():
             
             if len(data) > 1:
                 temp_df = pd.DataFrame(data[1:], columns=data[0])
+                
+                # Bersihkan spasi di nama kolom
                 temp_df.columns = temp_df.columns.str.strip()
+                
+                # Tambahkan identitas moda
                 temp_df['Jenis Simpul Transportasi'] = moda
                 all_dfs.append(temp_df)
                 
@@ -68,29 +72,42 @@ def load_traffic_data():
     if all_dfs:
         df = pd.concat(all_dfs, ignore_index=True)
         
-        # --- PREPROCESSING TANGGAL ---
-        col_tanggal = next((c for c in df.columns if c.lower() in ['tanggal laporan', 'tanggal', 'tgl', 'timestamp', 'waktu']), None)
-        if col_tanggal:
-            df['Tanggal Laporan'] = pd.to_datetime(df[col_tanggal], errors='coerce')
+        # --- 1. PREPROCESSING TANGGAL ---
+        # Prioritas: 'Tanggal Laporan Posko' (Manual Input) -> 'Timestamp' (Otomatis)
+        if 'Tanggal Laporan Posko' in df.columns:
+            df['Tanggal Laporan'] = pd.to_datetime(df['Tanggal Laporan Posko'], errors='coerce')
+        elif 'Timestamp' in df.columns:
+            df['Tanggal Laporan'] = pd.to_datetime(df['Timestamp'], errors='coerce')
         else:
-            df['Tanggal Laporan'] = pd.to_datetime('today')
+            # Fallback cari kolom lain
+            col_lain = next((c for c in df.columns if 'tanggal' in c.lower() or 'tgl' in c.lower()), None)
+            if col_lain:
+                df['Tanggal Laporan'] = pd.to_datetime(df[col_lain], errors='coerce')
+            else:
+                df['Tanggal Laporan'] = pd.to_datetime('today')
 
-        # --- PREPROCESSING ANGKA (SOLUSI FORMAT KOMA/TITIK) ---
+        # --- 2. PREPROCESSING ANGKA ---
+        # Mencari kolom jumlah penumpang/kendaraan
         cols_numeric = []
-        keywords_angka = ['jumlah', 'pnp', 'penumpang', 'kendaraan', 'datang', 'berangkat', 'naik', 'turun', 'masuk', 'keluar']
+        keywords_angka = [
+            'jumlah penumpang', 'jumlah kendaraan', 'datang', 'berangkat', 
+            'masuk', 'keluar', 'kendaraan', 'penumpang'
+        ]
         
         for col in df.columns:
+            # Lewatkan kolom yang jelas-jelas bukan angka statistik
+            if any(x in col.lower() for x in ['tanggal', 'jam', 'tahun', 'nip', 'nim', 'telepon']):
+                continue
+
+            # Cek apakah header mengandung keyword angka
             if any(k in col.lower() for k in keywords_angka):
                 cols_numeric.append(col)
                 
-                # --- LOGIKA BARU: HAPUS SEMUA YANG BUKAN ANGKA ---
-                # Regex r'[^\d]' artinya: Hapus apa saja yang BUKAN digit (0-9).
-                # Jadi "," atau "." atau " orang" akan hilang semua.
-                # "10,362" -> "10362"
-                # "10.362" -> "10362"
+                # BERSIHKAN FORMAT (Hapus titik, koma, teks "orang", dll)
+                # Hanya sisakan digit 0-9
                 df[col] = (df[col].astype(str)
-                           .str.replace(r'[^\d]', '', regex=True)
-                           .replace('', '0')) # Jika kosong jadi 0
+                           .str.replace(r'[^\d]', '', regex=True) # Hapus non-digit
+                           .replace('', '0')) # Kalau kosong jadi 0
                 
                 # Convert ke angka
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
@@ -118,7 +135,7 @@ def load_petugas_log():
 df_traffic, numeric_cols = load_traffic_data()
 df_petugas = load_petugas_log()
 
-# 1. HEADER & KPI
+# 1. HEADER & KPI NASIONAL
 c_kpi1, c_kpi2, c_kpi3 = st.columns(3)
 
 total_pergerakan = 0
@@ -131,11 +148,11 @@ c_kpi3.metric("Last Update", f"{datetime.now().strftime('%H:%M:%S')}")
 
 st.markdown("---")
 
-# 2. VISUALISASI PER MODA (Tampilkan Semua walau Kosong)
+# 2. LOOP PER MODA (Tampilkan Semua Sheet)
 for mode in SUMBER_DATA_MODA.keys():
     st.header(f"📍 Laporan: {mode}")
     
-    # Filter Data
+    # Filter Data untuk Moda ini
     subset = pd.DataFrame()
     if not df_traffic.empty and 'Jenis Simpul Transportasi' in df_traffic.columns:
         subset = df_traffic[df_traffic['Jenis Simpul Transportasi'] == mode]
@@ -143,16 +160,17 @@ for mode in SUMBER_DATA_MODA.keys():
     # --- JIKA DATA KOSONG ---
     if subset.empty:
         st.warning(f"⚠️ Belum ada data laporan masuk untuk **{mode}**.")
-        st.caption("Petugas di lapangan belum menginput data atau sheet masih kosong.")
+        st.caption("Menunggu input data dari petugas di lapangan.")
         st.markdown("---")
         continue 
 
     # --- JIKA DATA ADA ---
-    # Sort Data
+    # Sort berdasarkan Tanggal Laporan Posko
     if 'Tanggal Laporan' in subset.columns:
         subset = subset.sort_values('Tanggal Laporan')
     
     # A. LINE CHART (GRAFIK GARIS)
+    # Ambil kolom numerik yang datanya > 0
     cols_active = [c for c in numeric_cols if c in subset.columns and subset[c].sum() > 0]
     
     if cols_active:
@@ -162,7 +180,8 @@ for mode in SUMBER_DATA_MODA.keys():
             y=cols_active,
             markers=True,
             title=f"Tren Pergerakan di {mode}",
-            template='seaborn'
+            template='seaborn',
+            labels={'value': 'Jumlah', 'variable': 'Kategori'}
         )
         fig.update_layout(yaxis_title="Jumlah (Orang/Kendaraan)")
         st.plotly_chart(fig, use_container_width=True)
@@ -170,21 +189,42 @@ for mode in SUMBER_DATA_MODA.keys():
         with st.expander(f"📄 Detail Data Angka {mode}"):
             st.dataframe(subset[['Tanggal Laporan'] + cols_active], use_container_width=True)
     else:
-        st.info(f"Data masuk untuk {mode}, namun belum ada angka pergerakan (Nol).")
+        st.info(f"Data masuk untuk {mode}, namun angka pergerakan masih 0.")
 
-    # B. TABEL KENDALA
-    col_kendala = next((c for c in subset.columns if 'kendala' in c.lower()), None)
-    col_solusi = next((c for c in subset.columns if 'solusi' in c.lower()), None)
+    # B. TABEL KENDALA & KEJADIAN PENTING (LOGIKA DIPERBAIKI)
+    # Kita cari beberapa kemungkinan nama kolom kendala/kejadian
+    target_cols = {
+        'kendala': next((c for c in subset.columns if 'kendala' in c.lower()), None),
+        'kejadian': next((c for c in subset.columns if 'uraian kejadian' in c.lower()), None),
+        'solusi': next((c for c in subset.columns if 'solusi' in c.lower() or 'tindak lanjut' in c.lower()), None)
+    }
     
-    if col_kendala:
-        laporan_penting = subset[
-            (subset[col_kendala].astype(str).str.len() > 3) & (subset[col_kendala] != "-")
-        ]
-        if not laporan_penting.empty:
-            st.error(f"📢 **Kendala Dilaporkan ({mode}):**")
-            cols_to_show = ['Tanggal Laporan', col_kendala]
-            if col_solusi: cols_to_show.append(col_solusi)
-            st.dataframe(laporan_penting[cols_to_show], hide_index=True, use_container_width=True)
+    # Filter baris yang punya isi di kolom Kendala ATAU kolom Kejadian
+    # Syarat: Tidak kosong, bukan "-", panjang teks > 3
+    mask_kendala = pd.Series([False] * len(subset), index=subset.index)
+    mask_kejadian = pd.Series([False] * len(subset), index=subset.index)
+    
+    if target_cols['kendala']:
+        mask_kendala = (subset[target_cols['kendala']].astype(str).str.len() > 3) & (subset[target_cols['kendala']] != "-")
+    
+    if target_cols['kejadian']:
+        mask_kejadian = (subset[target_cols['kejadian']].astype(str).str.len() > 3) & (subset[target_cols['kejadian']] != "-")
+        
+    # Gabungkan (OR): Tampilkan jika ada kendala ATAU ada kejadian
+    laporan_penting = subset[mask_kendala | mask_kejadian]
+    
+    if not laporan_penting.empty:
+        st.error(f"📢 **Catatan Penting / Kendala di {mode}:**")
+        
+        # Tentukan kolom mana yang mau ditampilkan di tabel
+        cols_to_show = ['Tanggal Laporan']
+        if target_cols['kendala']: cols_to_show.append(target_cols['kendala'])
+        if target_cols['kejadian']: cols_to_show.append(target_cols['kejadian'])
+        if target_cols['solusi']: cols_to_show.append(target_cols['solusi'])
+        
+        st.dataframe(laporan_penting[cols_to_show], hide_index=True, use_container_width=True)
+    else:
+        st.success("✅ Tidak ada kendala atau kejadian khusus yang dilaporkan.")
     
     st.markdown("---")
 
