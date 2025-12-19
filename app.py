@@ -142,25 +142,22 @@ if not df_traffic.empty:
         # Clean column names by removing leading/trailing whitespace
         df_traffic.columns = df_traffic.columns.str.strip()
 
-        # OPTIONAL: Debugging line to see the actual column names in your app
-        # st.write("Available columns:", df_traffic.columns.tolist())
+# OPTIONAL: Debugging line to see the actual column names in your app
+# st.write("Available columns:", df_traffic.columns.tolist())
         subset = df_traffic[df_traffic['Jenis Simpul Transportasi'] == mode].sort_values('Tanggal Laporan')
         
         # A. GRAFIK
         # Cari kolom angka spesifik untuk moda ini (karena Rest Area beda dengan Bandara)
         # Kita filter kolom numerik yang nilainya > 0 di subset ini agar grafik relevan
-        cols_active = [c for c in numeric_cols if subset[c].sum() > 0]
-        
-        if cols_active:
-            df_melt = subset.melt(id_vars=['Tanggal Laporan'], 
-                                value_vars=cols_active,
-                                var_name='Kategori', value_name='Jumlah')
-            
-            fig = px.line(df_melt, x='Tanggal Laporan', y='Jumlah', color='Kategori', 
-                          markers=True, template='plotly_white', height=350)
-            st.plotly_chart(fig, use_container_width=True)
+        sort_col = 'Tanggal Laporan'
+
+# Check if the column exists before sorting
+        if sort_col in df_traffic.columns:
+            subset = df_traffic[df_traffic['Jenis Simpul Transportasi'] == mode].sort_values(sort_col)
         else:
-            st.warning(f"Belum ada data angka untuk {mode}")
+    # Fallback: If column is missing, show an error or just filter without sorting
+            st.error(f"Column '{sort_col}' not found. Available columns: {df_traffic.columns.tolist()}")
+            subset = df_traffic[df_traffic['Jenis Simpul Transportasi'] == mode]
 
         # B. TABEL KENDALA (Fleksibel mencari kolom kendala)
         # Mencari kolom yang mengandung kata 'Kendala' dan 'Solusi'
