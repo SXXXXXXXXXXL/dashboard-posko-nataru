@@ -59,6 +59,12 @@ def load_traffic_data():
                 temp_df = pd.DataFrame(data[1:], columns=data[0])
                 temp_df.columns = temp_df.columns.str.strip()
                 temp_df['Jenis Simpul Transportasi'] = moda
+                
+                # --- [PERBAIKAN ERROR INVALID INDEX] ---
+                # Hapus kolom yang memiliki nama duplikat di dalam satu sheet
+                temp_df = temp_df.loc[:, ~temp_df.columns.duplicated()]
+                # ---------------------------------------
+                
                 all_dfs.append(temp_df)
         except Exception as e:
             print(f"⚠️ Gagal load {moda}: {e}")
@@ -227,12 +233,6 @@ elif selected_menu == "⚠️ Insiden & Kejadian":
         col_uraian = next((c for c in subset.columns if 'uraian kejadian' in c.lower()), None)
 
         if col_insiden_flag:
-            # --- PERBAIKAN LOGIKA FILTER ---
-            # 1. Pastikan kolom dibaca sebagai string
-            # 2. Cari yang mengandung kata "ada"
-            # 3. DAN pastikan TIDAK mengandung kata "tidak"
-            # Ini mencegah "Tidak Ada" ikut terhitung.
-            
             series_lower = subset[col_insiden_flag].astype(str).str.lower().str.strip()
             
             insiden_df = subset[
